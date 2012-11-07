@@ -1,0 +1,6 @@
+[submodule "thirdparty/esprima"]
+	path = thirdparty/esprima
+	url = https://github.com/ariya/esprima.git
+[submodule "thirdparty/jquery-throttle-debounce"]
+	path = thirdparty/jquery-throttle-debounce
+	url = https://github.com/cowboy/jquery-throttle-debounce.git
