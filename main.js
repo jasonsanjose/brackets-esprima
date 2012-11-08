@@ -29,9 +29,10 @@ define(function (require, exports, module) {
     
     require("thirdparty/jquery-throttle-debounce/jquery.ba-throttle-debounce");
     
-    var esprima         = require("thirdparty/esprima/esprima"),
-        EditorManager   = brackets.getModule("editor/EditorManager"),
-        ExtensionUtils  = brackets.getModule("utils/ExtensionUtils");
+    var esprima             = require("thirdparty/esprima/esprima"),
+        CodeHintsManager    = brackets.getModule("editor/CodeHintManager"),
+        EditorManager       = brackets.getModule("editor/EditorManager"),
+        ExtensionUtils      = brackets.getModule("utils/ExtensionUtils");
     
     ExtensionUtils.loadStyleSheet(module, "styles/styles.css");
     
@@ -125,10 +126,6 @@ define(function (require, exports, module) {
             return true;
         });
     
-        if (typeof id === 'undefined') {
-            return;
-        }
-    
         traverse(syntax, function (node, path) {
             var start, end;
             
@@ -148,7 +145,7 @@ define(function (require, exports, module) {
             // log all identifiers
             identifiers[node.name] = node;
             
-            if (node !== id && node.name === id.name) {
+            if (id && node !== id && node.name === id.name) {
                 start = {
                     line: node.loc.start.line - 1,
                     ch: node.loc.start.column
@@ -162,8 +159,6 @@ define(function (require, exports, module) {
             
             return true;
         });
-        
-        console.log(identifiers);
     }
     
     function _markOccurrences(editor) {
@@ -202,6 +197,54 @@ define(function (require, exports, module) {
         _installEditorListeners(current);
     }
     
+    function IdentifierHints() {
+    }
+    
+    IdentifierHints.prototype.getQueryInfo = function (editor, cursor) {
+        var query = { queryStr: "" };
+        
+        // FIXME refine queryStr
+        if (editor.getModeForSelection() === "javascript") {
+            var token = editor._codeMirror.getTokenAt(cursor);
+            
+            // See if there's an identifier at the cursor location
+            if (token.className) {
+                query.queryStr = token.string.trim();
+            }
+        }
+        
+        return query;
+    };
+    
+    IdentifierHints.prototype.search = function (query) {
+        var results = [],
+            string = query.queryStr;
+        
+        // simple substring start search
+        Object.keys(identifiers).forEach(function (ident) {
+            if (!string || string.length === 0 || ident.indexOf(string) === 0) {
+                results.push(ident);
+            }
+        });
+        
+        return results.sort(function (a, b) {
+            if (a < b) {
+                return -1;
+            } else if (a > b) {
+                return 1;
+            }
+            
+            return 0;
+        });
+    };
+    
+    IdentifierHints.prototype.handleSelect = function (string, editor, cursor) {
+    };
+    
+    IdentifierHints.prototype.shouldShowHintsOnKey = function (key) {
+        return key === "." || key === "(";
+    };
+    
     // init
     (function () {
         var $exports = $(exports);
@@ -216,7 +259,7 @@ define(function (require, exports, module) {
                 // save the current syntax tree
                 syntax = e.data.syntax;
                 
-                if (activeEditor && (activeEditor.document.fullPath === e.data.fullPath)) {
+                if (activeEditor && (activeEditor.document.file.fullPath === e.data.fullPath)) {
                     $(exports).triggerHandler("parse", [e.data.syntax, activeEditor]);
                 }
             } else {
@@ -237,5 +280,7 @@ define(function (require, exports, module) {
         $exports.on("parse", function (event, syntax, editor) {
             _markOccurrences(editor);
         });
+        
+        CodeHintsManager.registerHintProvider(new IdentifierHints());
     }());
 });
