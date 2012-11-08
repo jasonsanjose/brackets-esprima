@@ -27,16 +27,148 @@
 define(function (require, exports, module) {
     'use strict';
     
-    var EditorManager = brackets.getModule("editor/EditorManager");
+    require("thirdparty/jquery-throttle-debounce/jquery.ba-throttle-debounce");
     
-    var path    = module.uri.substring(0, module.uri.lastIndexOf("/") + 1),
-        worker  = new Worker(path + "worker.js");
+    var esprima         = require("thirdparty/esprima/esprima"),
+        EditorManager   = brackets.getModule("editor/EditorManager"),
+        ExtensionUtils  = brackets.getModule("utils/ExtensionUtils");
+    
+    ExtensionUtils.loadStyleSheet(module, "styles/styles.css");
+    
+    var path            = module.uri.substring(0, module.uri.lastIndexOf("/") + 1),
+        worker          = new Worker(path + "worker.js"),
+        syntax,
+        markers         = [],
+        identifiers     = {};
     
     function _parseEditor(editor) {
+        // TODO handle async issues if parsing completes after switching editors
+        // TODO move marker creation to worker thread?
         worker.postMessage({
-            type    : "parse",
-            text    : editor.document.getText()
+            type        : "parse",
+            fullPath    : editor.document.file.fullPath,
+            text        : editor.document.getText()
         });
+    }
+    
+    // modified from http://esprima.org/demo/highlight.html
+    function trackCursor(editor) {
+        var pos, code, node, id, closure;
+    
+        markers.forEach(function (marker) {
+            marker.clear();
+        });
+        
+        markers = [];
+        identifiers = {};
+    
+        if (syntax === null) {
+            return;
+//            parse();
+//            if (syntax === null) {
+//                return;
+//            }
+        }
+    
+        pos = editor.indexFromPos(editor.getCursor());
+        code = editor.getValue();
+    
+        // Executes visitor on the object and its children (recursively).
+        function traverse(object, visitor, master) {
+            var key, child, parent, path;
+    
+            parent = (typeof master === 'undefined') ? [] : master;
+    
+            if (visitor.call(null, object, parent) === false) {
+                return false;
+            }
+            
+            for (key in object) {
+                if (object.hasOwnProperty(key)) {
+                    child = object[key];
+                    path = [ object ];
+                    path.push(parent);
+                    if (typeof child === 'object' && child !== null) {
+                        if (traverse(child, visitor, path) === false) {
+                            // stop traversal
+                            return false;
+                        }
+                    }
+                }
+            }
+            
+            return true;
+        }
+    
+        traverse(syntax, function (node, path) {
+            var start, end;
+            
+            if (node.type !== esprima.Syntax.Identifier) {
+                return true;
+            }
+            
+            if (pos >= node.range[0] && pos <= node.range[1]) {
+                start = {
+                    line: node.loc.start.line - 1,
+                    ch: node.loc.start.column
+                };
+                end = {
+                    line: node.loc.end.line - 1,
+                    ch: node.loc.end.column
+                };
+                markers.push(editor.markText(start, end, 'identifier'));
+                id = node;
+                
+                return false;
+            }
+                
+            return true;
+        });
+    
+        if (typeof id === 'undefined') {
+            return;
+        }
+    
+        traverse(syntax, function (node, path) {
+            var start, end;
+            
+            if (node.type !== esprima.Syntax.Identifier) {
+                return true;
+            }
+            
+            // TODO variable scope
+            if (closure) {
+                // ignore this occurrence if outside the closure
+                if ((node.range[0] < closure.range[0])
+                        || (node.range[1] > closure.range[1])) {
+                    return true;
+                }
+            }
+            
+            // log all identifiers
+            identifiers[node.name] = node;
+            
+            if (node !== id && node.name === id.name) {
+                start = {
+                    line: node.loc.start.line - 1,
+                    ch: node.loc.start.column
+                };
+                end = {
+                    line: node.loc.end.line - 1,
+                    ch: node.loc.end.column
+                };
+                markers.push(editor.markText(start, end, 'highlight'));
+            }
+            
+            return true;
+        });
+        
+        console.log(identifiers);
+    }
+    
+    function _markOccurrences(editor) {
+        // TODO handle async issues if parsing completes after switching editors
+        trackCursor(editor._codeMirror);
     }
     
     function _installEditorListeners(editor) {
@@ -44,9 +176,21 @@ define(function (require, exports, module) {
             return;
         }
         
-        $(editor).on("change.brackets-esprima", function () {
+        // debounce parse and mark occurrences so that both handlers wait 100ms
+        // for their respective events to finish
+        var debounceParse = $.debounce(100, function () {
             _parseEditor(editor);
         });
+        
+        var debounceMarkOccurrences = $.debounce(100, function () {
+            _markOccurrences(editor);
+        });
+        
+        $(editor)
+            .on("change.brackets-esprima", debounceParse)
+            .on("cursorActivity.brackets-esprima", debounceMarkOccurrences);
+        
+        // immediately parse the new editor
         _parseEditor(editor);
     }
     
@@ -60,11 +204,21 @@ define(function (require, exports, module) {
     
     // init
     (function () {
+        var $exports = $(exports);
+        
         worker.addEventListener("message", function (e) {
             var type = e.data.type;
             
             if (type === "parse") {
-                console.log(e.data.tree);
+                // only fire the parse event if the active editor matches the parsed document
+                var activeEditor = EditorManager.getActiveEditor();
+                
+                // save the current syntax tree
+                syntax = e.data.syntax;
+                
+                if (activeEditor && (activeEditor.document.fullPath === e.data.fullPath)) {
+                    $(exports).triggerHandler("parse", [e.data.syntax, activeEditor]);
+                }
             } else {
                 console.log(e.data.log || e.data);
             }
@@ -73,7 +227,15 @@ define(function (require, exports, module) {
         // start the worker
         worker.postMessage({});
         
-        $(EditorManager).on("activeEditorChange", _activeEditorChange);
-        _installEditorListeners(EditorManager.getFocusedEditor());
+        // uninstall/install change listner as the active editor changes
+        $(EditorManager).on("activeEditorChange.brackets-esprima", _activeEditorChange);
+        
+        // install on the initial active editor
+        _installEditorListeners(EditorManager.getActiveEditor());
+        
+        // install our own parse event handler
+        $exports.on("parse", function (event, syntax, editor) {
+            _markOccurrences(editor);
+        });
     }());
 });

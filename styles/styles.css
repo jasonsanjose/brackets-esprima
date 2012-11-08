@@ -1,0 +1,10 @@
+.CodeMirror .identifier {
+    background-color: #ffffcc;
+    border: 1px solid #ffcc99;
+    margin: -1px;
+    border-radius: 4px;
+}
+
+.CodeMirror .highlight {
+    background-color: #ffffcc;
+}

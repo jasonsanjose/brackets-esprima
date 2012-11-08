@@ -32,12 +32,27 @@ importScripts("thirdparty/esprima/esprima.js");
         var type = e.data.type;
         
         if (type === "parse") {
-            self.postMessage({
-                type    : "parse",
-                tree    : esprima.parse(e.data.text, {
-                    tolerant    : true
-                })
-            });
+            var syntax;
+            
+            try {
+                syntax = esprima.parse(e.data.text, {
+                    loc         : true,
+                    range       : true,
+                    tokens      : true,
+                    tolerant    : true,
+                    comment     : true
+                });
+            } catch (err) {
+                // do nothing
+            }
+            
+            if (syntax) {
+                self.postMessage({
+                    type        : "parse",
+                    fullPath    : e.data.fullPath,
+                    syntax      : syntax
+                });
+            }
         } else {
             self.postMessage({
                 log : "Unknown message: " + JSON.stringify(e.data)
