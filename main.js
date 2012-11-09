@@ -64,18 +64,37 @@ define(function (require, exports, module) {
         markers = [];
     }
     
+    function _getChildNodes(parts) {
+        var children = [];
+        
+        parts.forEach(function (part) {
+            if (part) {
+                if (Array.isArray(part)) {
+                    Array.prototype.push.apply(children, part);
+                } else {
+                    children.push(part);
+                }
+            }
+        });
+        
+        return children;
+    }
+    
     function _findCurrentScope(current, pos, scope) {
         scope = (current.identifiers) ? current : scope;
         
-        if (current.range && current.range[0] <= pos && pos <= current.range[1]) {
-            var body = current.body || current.expression || current["arguments"];
+        if (current.range && current.range[0] <= pos && pos < current.range[1]) {
+            var children = _getChildNodes([
+                current.body,
+                current.expression,
+                current["arguments"],
+                current.callee
+            ]);
             
-            if (!body) {
+            if (!children.length) {
                 return scope;
             } else {
-                var children = Array.isArray(body) ? body : [body],
-                    i = 0,
-                    child;
+                var i = 0;
                 
                 for (i = 0; i < children.length; i++) {
                     var foundScope = _findCurrentScope(children[i], pos, scope);
@@ -84,10 +103,13 @@ define(function (require, exports, module) {
                         return foundScope;
                     }
                 }
+                
+                // empty body
+                return scope;
             }
         }
         
-        return scope;
+        return null;
     }
     
     // Executes visitor on the object and its children (recursively).
@@ -159,7 +181,7 @@ define(function (require, exports, module) {
                 
                 return false;
             }
-                
+            
             return true;
         });
     
@@ -243,7 +265,7 @@ define(function (require, exports, module) {
                 query.queryStr = token.string.trim();
             }
         
-            query.scope = _findCurrentScope(syntax, pos, null);
+            query.scope = _findCurrentScope(syntax, pos, null) || syntax;
         }
         
         return query;
@@ -284,7 +306,11 @@ define(function (require, exports, module) {
         });
     };
     
-    IdentifierHints.prototype.handleSelect = function (string, editor, cursor) {
+    IdentifierHints.prototype.handleSelect = function (completion, editor, cursor) {
+        // FIXME look at tokens behind the cursor
+        editor.document.replaceRange(completion, cursor);
+        
+        return true;
     };
     
     IdentifierHints.prototype.shouldShowHintsOnKey = function (key) {

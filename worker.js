@@ -45,7 +45,9 @@ importScripts("thirdparty/esprima/esprima.js");
         nodes.forEach(function (current) {
             type = current.type;
             
-            if (type === esprima.Syntax.FunctionDeclaration) {
+            // TODO handle more expressions correctly!
+            if (type === esprima.Syntax.FunctionDeclaration
+                    || type === esprima.Syntax.FunctionExpression) {
                 // add pointer to parent scope
                 current.parentScope = scope;
                 
@@ -66,6 +68,12 @@ importScripts("thirdparty/esprima/esprima.js");
             } else if (type === esprima.Syntax.CallExpression) {
                 _processIdentifiers(current.callee, scope);
                 _processIdentifiers(current["arguments"], scope);
+            } else if (type === esprima.Syntax.IfStatement) {
+                _processIdentifiers(current.consequent, scope);
+                
+                if (current.alternate) {
+                    _processIdentifiers(current.alternate, scope);
+                }
             } else if (current.body) {
                 _processIdentifiers(current.body, scope);
             } else {
