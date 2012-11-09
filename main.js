@@ -40,8 +40,7 @@ define(function (require, exports, module) {
         worker          = new Worker(path + "worker.js"),
         syntax,
         markers         = [],
-        identifiers     = {},
-        cursorScope     = null;
+        identifiers     = {};
     
     function _parseEditor(editor) {
         // TODO handle async issues if parsing completes after switching editors
@@ -69,10 +68,12 @@ define(function (require, exports, module) {
         scope = (current.identifiers) ? current : scope;
         
         if (current.range && current.range[0] <= pos && pos <= current.range[1]) {
-            if (!current.body) {
+            var body = current.body || current.expression || current["arguments"];
+            
+            if (!body) {
                 return scope;
             } else {
-                var children = Array.isArray(current.body) ? current.body : [current.body],
+                var children = Array.isArray(body) ? body : [body],
                     i = 0,
                     child;
                 
@@ -101,6 +102,11 @@ define(function (require, exports, module) {
         
         for (key in object) {
             if (object.hasOwnProperty(key)) {
+                // FIXME filter out nodes in the tree
+                if (key === "identifiers" || key === "parentScope") {
+                    return;
+                }
+                
                 child = object[key];
                 path = [ object ];
                 path.push(parent);
@@ -118,24 +124,18 @@ define(function (require, exports, module) {
     
     // modified from http://esprima.org/demo/highlight.html
     function trackCursor(editor) {
-        var pos, code, node, id;
+        var pos, node, id;
         
         _clearMarkers();
         
         identifiers = {};
     
+        // AST will be null if theree are unrecoverable errors
         if (syntax === null) {
             return;
-//            parse();
-//            if (syntax === null) {
-//                return;
-//            }
         }
     
         pos = editor.indexFromPos(editor.getCursor());
-        code = editor.getValue();
-        
-        cursorScope = _findCurrentScope(syntax, pos, null);
     
         // highlight the identifier under the cursor
         traverse(syntax, function (node, path) {
@@ -206,7 +206,7 @@ define(function (require, exports, module) {
             _parseEditor(editor);
         });
         
-        var debounceMarkOccurrences = $.debounce(100, function () {
+        var debounceMarkOccurrences = $.debounce(200, function () {
             _markOccurrences(editor);
         });
         
@@ -231,7 +231,8 @@ define(function (require, exports, module) {
     }
     
     IdentifierHints.prototype.getQueryInfo = function (editor, cursor) {
-        var query = { queryStr: "" };
+        var query = { queryStr: "" },
+            pos = editor.indexFromPos(cursor);
         
         // FIXME refine queryStr
         if (editor.getModeForSelection() === "javascript") {
@@ -241,6 +242,8 @@ define(function (require, exports, module) {
             if (token.className) {
                 query.queryStr = token.string.trim();
             }
+        
+            query.scope = _findCurrentScope(syntax, pos, null);
         }
         
         return query;
@@ -252,8 +255,8 @@ define(function (require, exports, module) {
             idents = [];
         
         // walk up the tree
-        if (cursorScope) {
-            var currentScope = cursorScope;
+        if (query.scope) {
+            var currentScope = query.scope;
             
             do {
                 Array.prototype.push.apply(idents, Object.keys(currentScope.identifiers));
@@ -287,44 +290,6 @@ define(function (require, exports, module) {
     IdentifierHints.prototype.shouldShowHintsOnKey = function (key) {
         return key === ".";
     };
-    
-    function _addIdentifier(scope, node) {
-        var id = (node.name) ? node : node.id;
-        
-        if (id) {
-            scope.identifiers[id.name] = node;
-        }
-    }
-    
-    function _processIdentifiers(body, scope) {
-        var nodes = Array.isArray(body) ? body : [body];
-        
-        scope.identifiers = scope.identifiers || {};
-        
-        nodes.forEach(function (current) {
-            if (current.type === esprima.Syntax.FunctionDeclaration) {
-                // add pointer to parent scope
-                current.parentScope = scope;
-                
-                // add function decl to parent scope
-                _addIdentifier(current.parentScope, current);
-                
-                // add params to function decl scope
-                _processIdentifiers(current.params, current);
-                
-                // create a new scope for this function
-                _processIdentifiers(current.body, current);
-            } else if (current.type === esprima.Syntax.VariableDeclaration) {
-                _processIdentifiers(current.declarations, scope);
-            } else if (current.type === esprima.Syntax.Identifier) {
-                _addIdentifier(scope, current);
-            } else if (current.body) {
-                _processIdentifiers(current.body, scope);
-            } else {
-                _addIdentifier(scope, current);
-            }
-        });
-    }
     
     // init
     (function () {
@@ -360,7 +325,6 @@ define(function (require, exports, module) {
         // install our own parse event handler
         $exports.on("parse", function (event, syntax, editor) {
             _markOccurrences(editor);
-            _processIdentifiers(syntax.body, syntax);
         });
         
         CodeHintsManager.registerHintProvider(new IdentifierHints());

@@ -37,12 +37,15 @@ importScripts("thirdparty/esprima/esprima.js");
     }
     
     function _processIdentifiers(body, scope) {
-        var nodes = Array.isArray(body) ? body : [body];
+        var nodes = Array.isArray(body) ? body : [body],
+            type;
         
         scope.identifiers = scope.identifiers || {};
         
         nodes.forEach(function (current) {
-            if (current.type === esprima.Syntax.FunctionDeclaration) {
+            type = current.type;
+            
+            if (type === esprima.Syntax.FunctionDeclaration) {
                 // add pointer to parent scope
                 current.parentScope = scope;
                 
@@ -54,10 +57,15 @@ importScripts("thirdparty/esprima/esprima.js");
                 
                 // create a new scope for this function
                 _processIdentifiers(current.body, current);
-            } else if (current.type === esprima.Syntax.VariableDeclaration) {
+            } else if (type === esprima.Syntax.VariableDeclaration) {
                 _processIdentifiers(current.declarations, scope);
-            } else if (current.type === esprima.Syntax.Identifier) {
+            } else if (type === esprima.Syntax.Identifier) {
                 _addIdentifier(scope, current);
+            } else if (type === esprima.Syntax.ExpressionStatement) {
+                _processIdentifiers(current.expression, scope);
+            } else if (type === esprima.Syntax.CallExpression) {
+                _processIdentifiers(current.callee, scope);
+                _processIdentifiers(current["arguments"], scope);
             } else if (current.body) {
                 _processIdentifiers(current.body, scope);
             } else {
@@ -83,7 +91,7 @@ importScripts("thirdparty/esprima/esprima.js");
             return null;
         }
         
-        //_processIdentifiers(syntax.body, syntax);
+        _processIdentifiers(syntax.body, syntax);
         
         return syntax;
     }
