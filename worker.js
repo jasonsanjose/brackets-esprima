@@ -28,27 +28,75 @@ importScripts("thirdparty/esprima/esprima.js");
 (function () {
     'use strict';
     
+    function _addIdentifier(scope, node) {
+        var id = (node.name) ? node : node.id;
+        
+        if (id) {
+            scope.identifiers[id.name] = node;
+        }
+    }
+    
+    function _processIdentifiers(body, scope) {
+        var nodes = Array.isArray(body) ? body : [body];
+        
+        scope.identifiers = scope.identifiers || {};
+        
+        nodes.forEach(function (current) {
+            if (current.type === esprima.Syntax.FunctionDeclaration) {
+                // add pointer to parent scope
+                current.parentScope = scope;
+                
+                // add function decl to parent scope
+                _addIdentifier(current.parentScope, current);
+                
+                // add params to function decl scope
+                _processIdentifiers(current.params, current);
+                
+                // create a new scope for this function
+                _processIdentifiers(current.body, current);
+            } else if (current.type === esprima.Syntax.VariableDeclaration) {
+                _processIdentifiers(current.declarations, scope);
+            } else if (current.type === esprima.Syntax.Identifier) {
+                _addIdentifier(scope, current);
+            } else if (current.body) {
+                _processIdentifiers(current.body, scope);
+            } else {
+                _addIdentifier(scope, current);
+            }
+        });
+    }
+
+    function _parse(text) {
+        var syntax,
+            currentBody;
+        
+        try {
+            syntax = esprima.parse(text, {
+                loc         : true,
+                range       : true,
+                tokens      : true,
+                tolerant    : true,
+                comment     : true
+            });
+        } catch (err) {
+            // do nothing
+            return null;
+        }
+        
+        //_processIdentifiers(syntax.body, syntax);
+        
+        return syntax;
+    }
+    
     self.addEventListener("message", function (e) {
         var type = e.data.type;
         
         if (type === "parse") {
-            var syntax;
-            
-            try {
-                syntax = esprima.parse(e.data.text, {
-                    loc         : true,
-                    range       : true,
-                    tokens      : true,
-                    tolerant    : true,
-                    comment     : true
-                });
-            } catch (err) {
-                // do nothing
-            }
+            var syntax = _parse(e.data.text);
             
             if (syntax) {
                 self.postMessage({
-                    type        : "parse",
+                    type        : type,
                     fullPath    : e.data.fullPath,
                     syntax      : syntax
                 });

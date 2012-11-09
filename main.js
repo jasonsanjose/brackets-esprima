@@ -40,7 +40,8 @@ define(function (require, exports, module) {
         worker          = new Worker(path + "worker.js"),
         syntax,
         markers         = [],
-        identifiers     = {};
+        identifiers     = {},
+        cursorScope     = null;
     
     function _parseEditor(editor) {
         // TODO handle async issues if parsing completes after switching editors
@@ -52,15 +53,75 @@ define(function (require, exports, module) {
         });
     }
     
-    // modified from http://esprima.org/demo/highlight.html
-    function trackCursor(editor) {
-        var pos, code, node, id, closure;
-    
+    function _clearMarkers() {
+        if (markers.length === 0) {
+            return;
+        }
+        
         markers.forEach(function (marker) {
             marker.clear();
         });
         
         markers = [];
+    }
+    
+    function _findCurrentScope(current, pos, scope) {
+        scope = (current.identifiers) ? current : scope;
+        
+        if (current.range && current.range[0] <= pos && pos <= current.range[1]) {
+            if (!current.body) {
+                return scope;
+            } else {
+                var children = Array.isArray(current.body) ? current.body : [current.body],
+                    i = 0,
+                    child;
+                
+                for (i = 0; i < children.length; i++) {
+                    var foundScope = _findCurrentScope(children[i], pos, scope);
+                    
+                    if (foundScope) {
+                        return foundScope;
+                    }
+                }
+            }
+        }
+        
+        return scope;
+    }
+    
+    // Executes visitor on the object and its children (recursively).
+    function traverse(object, visitor, master) {
+        var key, child, parent, path;
+
+        parent = (typeof master === 'undefined') ? [] : master;
+
+        if (visitor.call(null, object, parent) === false) {
+            return false;
+        }
+        
+        for (key in object) {
+            if (object.hasOwnProperty(key)) {
+                child = object[key];
+                path = [ object ];
+                path.push(parent);
+                if (typeof child === 'object' && child !== null) {
+                    if (traverse(child, visitor, path) === false) {
+                        // stop traversal
+                        return false;
+                    }
+                }
+            }
+        }
+        
+        return true;
+    }
+    
+    // modified from http://esprima.org/demo/highlight.html
+    function trackCursor(editor) {
+        var pos, code, node, id;
+        
+        _clearMarkers();
+        
         identifiers = {};
     
         if (syntax === null) {
@@ -73,34 +134,10 @@ define(function (require, exports, module) {
     
         pos = editor.indexFromPos(editor.getCursor());
         code = editor.getValue();
+        
+        cursorScope = _findCurrentScope(syntax, pos, null);
     
-        // Executes visitor on the object and its children (recursively).
-        function traverse(object, visitor, master) {
-            var key, child, parent, path;
-    
-            parent = (typeof master === 'undefined') ? [] : master;
-    
-            if (visitor.call(null, object, parent) === false) {
-                return false;
-            }
-            
-            for (key in object) {
-                if (object.hasOwnProperty(key)) {
-                    child = object[key];
-                    path = [ object ];
-                    path.push(parent);
-                    if (typeof child === 'object' && child !== null) {
-                        if (traverse(child, visitor, path) === false) {
-                            // stop traversal
-                            return false;
-                        }
-                    }
-                }
-            }
-            
-            return true;
-        }
-    
+        // highlight the identifier under the cursor
         traverse(syntax, function (node, path) {
             var start, end;
             
@@ -126,20 +163,12 @@ define(function (require, exports, module) {
             return true;
         });
     
+        // highlight all occurrences of the identifier
         traverse(syntax, function (node, path) {
             var start, end;
             
             if (node.type !== esprima.Syntax.Identifier) {
                 return true;
-            }
-            
-            // TODO variable scope
-            if (closure) {
-                // ignore this occurrence if outside the closure
-                if ((node.range[0] < closure.range[0])
-                        || (node.range[1] > closure.range[1])) {
-                    return true;
-                }
             }
             
             // log all identifiers
@@ -182,6 +211,7 @@ define(function (require, exports, module) {
         });
         
         $(editor)
+            .on("change.brackets-esprima", _clearMarkers)
             .on("change.brackets-esprima", debounceParse)
             .on("cursorActivity.brackets-esprima", debounceMarkOccurrences);
         
@@ -218,10 +248,23 @@ define(function (require, exports, module) {
     
     IdentifierHints.prototype.search = function (query) {
         var results = [],
-            string = query.queryStr;
+            string = query.queryStr,
+            idents = [];
+        
+        // walk up the tree
+        if (cursorScope) {
+            var currentScope = cursorScope;
+            
+            do {
+                Array.prototype.push.apply(idents, Object.keys(currentScope.identifiers));
+                currentScope = currentScope.parentScope;
+            } while (currentScope);
+        } else {
+            Array.prototype.push.apply(idents, Object.keys(identifiers));
+        }
         
         // simple substring start search
-        Object.keys(identifiers).forEach(function (ident) {
+        idents.forEach(function (ident) {
             if (!string || string.length === 0 || ident.indexOf(string) === 0) {
                 results.push(ident);
             }
@@ -242,8 +285,46 @@ define(function (require, exports, module) {
     };
     
     IdentifierHints.prototype.shouldShowHintsOnKey = function (key) {
-        return key === "." || key === "(";
+        return key === ".";
     };
+    
+    function _addIdentifier(scope, node) {
+        var id = (node.name) ? node : node.id;
+        
+        if (id) {
+            scope.identifiers[id.name] = node;
+        }
+    }
+    
+    function _processIdentifiers(body, scope) {
+        var nodes = Array.isArray(body) ? body : [body];
+        
+        scope.identifiers = scope.identifiers || {};
+        
+        nodes.forEach(function (current) {
+            if (current.type === esprima.Syntax.FunctionDeclaration) {
+                // add pointer to parent scope
+                current.parentScope = scope;
+                
+                // add function decl to parent scope
+                _addIdentifier(current.parentScope, current);
+                
+                // add params to function decl scope
+                _processIdentifiers(current.params, current);
+                
+                // create a new scope for this function
+                _processIdentifiers(current.body, current);
+            } else if (current.type === esprima.Syntax.VariableDeclaration) {
+                _processIdentifiers(current.declarations, scope);
+            } else if (current.type === esprima.Syntax.Identifier) {
+                _addIdentifier(scope, current);
+            } else if (current.body) {
+                _processIdentifiers(current.body, scope);
+            } else {
+                _addIdentifier(scope, current);
+            }
+        });
+    }
     
     // init
     (function () {
@@ -279,6 +360,7 @@ define(function (require, exports, module) {
         // install our own parse event handler
         $exports.on("parse", function (event, syntax, editor) {
             _markOccurrences(editor);
+            _processIdentifiers(syntax.body, syntax);
         });
         
         CodeHintsManager.registerHintProvider(new IdentifierHints());
