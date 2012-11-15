@@ -5,7 +5,7 @@ define(function () {
 });
 
 function sayHello(str) {
-    
+    sayWorld();
 }
 
 function clear(z) {

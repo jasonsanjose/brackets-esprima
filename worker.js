@@ -28,63 +28,111 @@ importScripts("thirdparty/esprima/esprima.js");
 (function () {
     'use strict';
     
+    
     function _addIdentifier(scope, node) {
         var id = (node.name) ? node : node.id;
         
         if (id) {
+            scope.identifiers = scope.identifiers || {};
             scope.identifiers[id.name] = node;
         }
     }
     
-    function _processIdentifiers(body, scope) {
-        var nodes = Array.isArray(body) ? body : [body],
-            type;
+    function _addToQueue(queue, method, children) {
+        if (!children) {
+            return;
+        }
         
-        scope.identifiers = scope.identifiers || {};
+        if (!Array.isArray(children)) {
+            method.call(queue, children);
+        } else {
+            method.apply(queue, children);
+        }
+    }
+    
+    function _unshiftQueue(queue, children) {
+        _addToQueue(queue, Array.prototype.unshift, children);
+    }
+    
+    function _pushQueue(queue, children) {
+        _addToQueue(queue, Array.prototype.push, children);
+    }
+    
+    function _createNewScope(node, parentScope) {
+        var scope = {
+            node: node,
+            identifiers: {},
+            type: "scope",
+            children: []
+        };
         
-        nodes.forEach(function (current) {
+        if (parentScope) {
+            parentScope.children.push(scope);
+        }
+        
+        return scope;
+    }
+    
+    /**
+     * Walk the syntax tree looking for scopes (closures). Returns a tree of 
+     * scopes including declared and undeclared indentifiers.
+     * @param {object} program
+     */
+    function _buildScopeInfo(program) {
+        var current,
+            queue = [program],
+            type,
+            scope = _createNewScope(program),
+            childScope,
+            root = scope;
+        
+        while (queue.length > 0) {
+            current = queue.shift();
             type = current.type;
             
             // TODO handle more expressions correctly!
-            if (type === esprima.Syntax.FunctionDeclaration
+            if (type === "scope") {
+                scope = current;
+            } else if (type === esprima.Syntax.FunctionDeclaration
                     || type === esprima.Syntax.FunctionExpression) {
-                // add pointer to parent scope
-                current.parentScope = scope;
-                
                 // add function decl to parent scope
-                _addIdentifier(current.parentScope, current);
+                _addIdentifier(scope, current);
+                
+                // create a brand new scope for this closure
+                queue.push(_createNewScope(current, scope));
                 
                 // add params to function decl scope
-                _processIdentifiers(current.params, current);
+                _pushQueue(queue, current.params);
                 
-                // create a new scope for this function
-                _processIdentifiers(current.body, current);
+                // add body
+                _pushQueue(queue, current.body);
             } else if (type === esprima.Syntax.VariableDeclaration) {
-                _processIdentifiers(current.declarations, scope);
+                _unshiftQueue(queue, current.declarations);
             } else if (type === esprima.Syntax.Identifier) {
                 _addIdentifier(scope, current);
             } else if (type === esprima.Syntax.ExpressionStatement) {
-                _processIdentifiers(current.expression, scope);
+                _unshiftQueue(queue, current.expression);
             } else if (type === esprima.Syntax.CallExpression) {
-                _processIdentifiers(current.callee, scope);
-                _processIdentifiers(current["arguments"], scope);
+                _unshiftQueue(queue, current.callee);
+                _unshiftQueue(queue, current["arguments"]);
             } else if (type === esprima.Syntax.IfStatement) {
-                _processIdentifiers(current.consequent, scope);
+                _unshiftQueue(queue, current.consequent);
                 
                 if (current.alternate) {
-                    _processIdentifiers(current.alternate, scope);
+                    _unshiftQueue(queue, current.alternate);
                 }
             } else if (current.body) {
-                _processIdentifiers(current.body, scope);
+                _unshiftQueue(queue, current.body);
             } else {
                 _addIdentifier(scope, current);
             }
-        });
+        }
+        
+        return root;
     }
 
-    function _parse(text) {
-        var syntax,
-            currentBody;
+    function _parse(text, pos) {
+        var syntax;
         
         try {
             syntax = esprima.parse(text, {
@@ -96,25 +144,24 @@ importScripts("thirdparty/esprima/esprima.js");
             });
         } catch (err) {
             // do nothing
-            return null;
+            return {};
         }
         
-        _processIdentifiers(syntax.body, syntax);
-        
-        return syntax;
+        return {syntax: syntax, scope: _buildScopeInfo(syntax) };
     }
     
     self.addEventListener("message", function (e) {
         var type = e.data.type;
         
         if (type === "parse") {
-            var syntax = _parse(e.data.text);
+            var result = _parse(e.data.text, e.data.pos);
             
-            if (syntax) {
+            if (result && result.syntax) {
                 self.postMessage({
                     type        : type,
                     fullPath    : e.data.fullPath,
-                    syntax      : syntax
+                    syntax      : result.syntax,
+                    scope       : result.scope
                 });
             }
         } else {

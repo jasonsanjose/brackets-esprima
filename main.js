@@ -38,7 +38,7 @@ define(function (require, exports, module) {
     
     var path            = module.uri.substring(0, module.uri.lastIndexOf("/") + 1),
         worker          = new Worker(path + "worker.js"),
-        syntax,
+        parseInfo,
         markers         = [],
         identifiers     = {};
     
@@ -48,7 +48,8 @@ define(function (require, exports, module) {
         worker.postMessage({
             type        : "parse",
             fullPath    : editor.document.file.fullPath,
-            text        : editor.document.getText()
+            text        : editor.document.getText(),
+            pos         : editor.indexFromPos(editor.getCursorPos(false))
         });
     }
     
@@ -64,54 +65,6 @@ define(function (require, exports, module) {
         markers = [];
     }
     
-    function _getChildNodes(parts) {
-        var children = [];
-        
-        parts.forEach(function (part) {
-            if (part) {
-                if (Array.isArray(part)) {
-                    Array.prototype.push.apply(children, part);
-                } else {
-                    children.push(part);
-                }
-            }
-        });
-        
-        return children;
-    }
-    
-    function _findCurrentScope(current, pos, scope) {
-        scope = (current.identifiers) ? current : scope;
-        
-        if (current.range && current.range[0] <= pos && pos < current.range[1]) {
-            var children = _getChildNodes([
-                current.body,
-                current.expression,
-                current["arguments"],
-                current.callee
-            ]);
-            
-            if (!children.length) {
-                return scope;
-            } else {
-                var i = 0;
-                
-                for (i = 0; i < children.length; i++) {
-                    var foundScope = _findCurrentScope(children[i], pos, scope);
-                    
-                    if (foundScope) {
-                        return foundScope;
-                    }
-                }
-                
-                // empty body
-                return scope;
-            }
-        }
-        
-        return null;
-    }
-    
     // Executes visitor on the object and its children (recursively).
     function traverse(object, visitor, master) {
         var key, child, parent, path;
@@ -124,11 +77,6 @@ define(function (require, exports, module) {
         
         for (key in object) {
             if (object.hasOwnProperty(key)) {
-                // FIXME filter out nodes in the tree
-                if (key === "identifiers" || key === "parentScope") {
-                    return;
-                }
-                
                 child = object[key];
                 path = [ object ];
                 path.push(parent);
@@ -153,14 +101,14 @@ define(function (require, exports, module) {
         identifiers = {};
     
         // AST will be null if theree are unrecoverable errors
-        if (syntax === null) {
+        if (parseInfo.syntax === null) {
             return;
         }
     
         pos = editor.indexFromPos(editor.getCursor());
     
         // highlight the identifier under the cursor
-        traverse(syntax, function (node, path) {
+        traverse(parseInfo.syntax, function (node, path) {
             var start, end;
             
             if (node.type !== esprima.Syntax.Identifier) {
@@ -186,7 +134,7 @@ define(function (require, exports, module) {
         });
     
         // highlight all occurrences of the identifier
-        traverse(syntax, function (node, path) {
+        traverse(parseInfo.syntax, function (node, path) {
             var start, end;
             
             if (node.type !== esprima.Syntax.Identifier) {
@@ -249,6 +197,27 @@ define(function (require, exports, module) {
         _installEditorListeners(current);
     }
     
+    function _getIdentifiersInScope(scope, pos) {
+        var identifiers = [],
+            queue = [scope],
+            current,
+            node;
+        
+        while (queue.length) {
+            current = queue.shift();
+            node = current.node;
+            
+            if (node.range && node.range[0] <= pos && pos < node.range[1]) {
+                queue = [].concat(current.children);
+                
+                // add immediate identifier children
+                Array.prototype.push.apply(identifiers, Object.keys(current.identifiers));
+            }
+        }
+        
+        return identifiers;
+    }
+    
     function IdentifierHints() {
     }
     
@@ -265,7 +234,7 @@ define(function (require, exports, module) {
                 query.queryStr = token.string.trim();
             }
         
-            query.scope = _findCurrentScope(syntax, pos, null) || syntax;
+            query.identifiers = _getIdentifiersInScope(parseInfo.scope, pos);
         }
         
         return query;
@@ -273,23 +242,10 @@ define(function (require, exports, module) {
     
     IdentifierHints.prototype.search = function (query) {
         var results = [],
-            string = query.queryStr,
-            idents = [];
-        
-        // walk up the tree
-        if (query.scope) {
-            var currentScope = query.scope;
-            
-            do {
-                Array.prototype.push.apply(idents, Object.keys(currentScope.identifiers));
-                currentScope = currentScope.parentScope;
-            } while (currentScope);
-        } else {
-            Array.prototype.push.apply(idents, Object.keys(identifiers));
-        }
+            string = query.queryStr;
         
         // simple substring start search
-        idents.forEach(function (ident) {
+        query.identifiers.forEach(function (ident) {
             if (!string || string.length === 0 || ident.indexOf(string) === 0) {
                 results.push(ident);
             }
@@ -329,7 +285,7 @@ define(function (require, exports, module) {
                 var activeEditor = EditorManager.getActiveEditor();
                 
                 // save the current syntax tree
-                syntax = e.data.syntax;
+                parseInfo = e.data;
                 
                 if (activeEditor && (activeEditor.document.file.fullPath === e.data.fullPath)) {
                     $(exports).triggerHandler("parse", [e.data.syntax, activeEditor]);
