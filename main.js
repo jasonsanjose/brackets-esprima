@@ -32,15 +32,21 @@ define(function (require, exports, module) {
     var esprima             = require("thirdparty/esprima/esprima"),
         CodeHintsManager    = brackets.getModule("editor/CodeHintManager"),
         EditorManager       = brackets.getModule("editor/EditorManager"),
-        ExtensionUtils      = brackets.getModule("utils/ExtensionUtils");
+        ExtensionUtils      = brackets.getModule("utils/ExtensionUtils"),
+        CommandManager      = brackets.getModule("command/CommandManager"),
+        Menus               = brackets.getModule("command/Menus"),
+        Strings             = brackets.getModule("strings");
     
     ExtensionUtils.loadStyleSheet(module, "styles/styles.css");
     
-    var path            = module.uri.substring(0, module.uri.lastIndexOf("/") + 1),
-        worker          = new Worker(path + "worker.js"),
+    var PARSER_COMMAND_ID   = "brackets-esprima",
+        PARSER_COMMAND_STR  = "Enable JavaScript Parser",
+        path                = module.uri.substring(0, module.uri.lastIndexOf("/") + 1),
+        worker,
         parseInfo,
-        markers         = [],
-        identifiers     = {};
+        markers             = [],
+        identifiers         = {},
+        enabled = false;
     
     function _parseEditor(editor) {
         // TODO handle async issues if parsing completes after switching editors
@@ -189,9 +195,14 @@ define(function (require, exports, module) {
         _parseEditor(editor);
     }
     
+    function _uninstallEditorListeners(editor) {
+        editor = editor || EditorManager.getActiveEditor();
+        $(editor).off(".brackets-esprima");
+    }
+    
     function _activeEditorChange(event, current, previous) {
         if (previous) {
-            $(previous.document).off(".brackets-esprima");
+            _uninstallEditorListeners(previous);
         }
         
         _installEditorListeners(current);
@@ -226,7 +237,7 @@ define(function (require, exports, module) {
             pos = editor.indexFromPos(cursor);
         
         // FIXME refine queryStr
-        if (editor.getModeForSelection() === "javascript") {
+        if (enabled && (editor.getModeForSelection() === "javascript")) {
             var token = editor._codeMirror.getTokenAt(cursor);
             
             // See if there's an identifier at the cursor location
@@ -273,42 +284,69 @@ define(function (require, exports, module) {
         return key === ".";
     };
     
-    // init
-    (function () {
+    function _handleToggleParser() {
         var $exports = $(exports);
         
-        worker.addEventListener("message", function (e) {
-            var type = e.data.type;
-            
-            if (type === "parse") {
-                // only fire the parse event if the active editor matches the parsed document
-                var activeEditor = EditorManager.getActiveEditor();
+        enabled = !enabled;
+        
+        CommandManager.get(PARSER_COMMAND_ID).setChecked(enabled);
+        
+        if (enabled) {
+            worker = new Worker(path + "worker.js");
+        
+            worker.addEventListener("message", function (e) {
+                var type = e.data.type;
                 
-                // save the current syntax tree
-                parseInfo = e.data;
-                
-                if (activeEditor && (activeEditor.document.file.fullPath === e.data.fullPath)) {
-                    $(exports).triggerHandler("parse", [e.data.syntax, activeEditor]);
+                if (type === "parse") {
+                    // only fire the parse event if the active editor matches the parsed document
+                    var activeEditor = EditorManager.getActiveEditor();
+                    
+                    // save the current syntax tree
+                    parseInfo = e.data;
+                    
+                    if (activeEditor && (activeEditor.document.file.fullPath === e.data.fullPath)) {
+                        $(exports).triggerHandler("parse", [e.data.syntax, activeEditor]);
+                    }
+                } else {
+                    console.log(e.data.log || e.data);
                 }
-            } else {
-                console.log(e.data.log || e.data);
+            });
+        
+            // start the worker
+            worker.postMessage({});
+            
+            // uninstall/install change listner as the active editor changes
+            $(EditorManager).on("activeEditorChange.brackets-esprima", _activeEditorChange);
+            
+            // install on the initial active editor
+            _installEditorListeners(EditorManager.getActiveEditor());
+            
+            // install our own parse event handler
+            $exports.on("parse.brackets-esprima", function (event, syntax, editor) {
+                _markOccurrences(editor);
+            });
+        } else {
+            if (worker) {
+                worker.terminate();
+                worker = null;
             }
-        });
+            
+            // uninstall listeners
+            _uninstallEditorListeners();
+            $(EditorManager).off(".brackets-esprima");
+            $exports.off(".brackets-esprima");
+        }
+    }
+    
+    // init
+    (function () {
+        // create command
+        var cmd = CommandManager.register(PARSER_COMMAND_STR, PARSER_COMMAND_ID, _handleToggleParser);
         
-        // start the worker
-        worker.postMessage({});
+        var debugMenu = Menus.getMenu(Menus.AppMenuBar.DEBUG_MENU);
+        debugMenu.addMenuItem(PARSER_COMMAND_ID);
         
-        // uninstall/install change listner as the active editor changes
-        $(EditorManager).on("activeEditorChange.brackets-esprima", _activeEditorChange);
-        
-        // install on the initial active editor
-        _installEditorListeners(EditorManager.getActiveEditor());
-        
-        // install our own parse event handler
-        $exports.on("parse", function (event, syntax, editor) {
-            _markOccurrences(editor);
-        });
-        
+        // FIXME need CodeHintsManager.unregister()
         CodeHintsManager.registerHintProvider(new IdentifierHints());
     }());
 });
