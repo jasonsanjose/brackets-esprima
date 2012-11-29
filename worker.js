@@ -22,12 +22,11 @@
  */
 
 /*jslint vars: true, plusplus: true, devel: true, nomen: true, indent: 4, maxerr: 50 */
-/*global define, require, $, self, importScripts, esprima */
-importScripts("thirdparty/esprima/esprima.js");
+/*global define, require, $, self, importScripts, acorn */
+importScripts("thirdparty/acorn/acorn.js");
 
 (function () {
     'use strict';
-    
     
     function _addIdentifier(scope, node) {
         var id = (node.name) ? node : node.id;
@@ -60,6 +59,7 @@ importScripts("thirdparty/esprima/esprima.js");
     
     function _createNewScope(node, parentScope) {
         var scope = {
+            parent: parentScope,
             node: node,
             identifiers: {},
             type: "scope",
@@ -93,8 +93,8 @@ importScripts("thirdparty/esprima/esprima.js");
             // TODO handle more expressions correctly!
             if (type === "scope") {
                 scope = current;
-            } else if (type === esprima.Syntax.FunctionDeclaration
-                    || type === esprima.Syntax.FunctionExpression) {
+            } else if (type === acorn.Syntax.FunctionDeclaration
+                    || type === acorn.Syntax.FunctionExpression) {
                 // add function decl to parent scope
                 _addIdentifier(scope, current);
                 
@@ -106,16 +106,16 @@ importScripts("thirdparty/esprima/esprima.js");
                 
                 // add body
                 _pushQueue(queue, current.body);
-            } else if (type === esprima.Syntax.VariableDeclaration) {
+            } else if (type === acorn.Syntax.VariableDeclaration) {
                 _unshiftQueue(queue, current.declarations);
-            } else if (type === esprima.Syntax.Identifier) {
+            } else if (type === acorn.Syntax.Identifier) {
                 _addIdentifier(scope, current);
-            } else if (type === esprima.Syntax.ExpressionStatement) {
+            } else if (type === acorn.Syntax.ExpressionStatement) {
                 _unshiftQueue(queue, current.expression);
-            } else if (type === esprima.Syntax.CallExpression) {
+            } else if (type === acorn.Syntax.CallExpression) {
                 _unshiftQueue(queue, current.callee);
                 _unshiftQueue(queue, current["arguments"]);
-            } else if (type === esprima.Syntax.IfStatement) {
+            } else if (type === acorn.Syntax.IfStatement) {
                 _unshiftQueue(queue, current.consequent);
                 
                 if (current.alternate) {
@@ -135,12 +135,10 @@ importScripts("thirdparty/esprima/esprima.js");
         var syntax;
         
         try {
-            syntax = esprima.parse(text, {
-                loc         : true,
-                range       : true,
-                tokens      : true,
-                tolerant    : true,
-                comment     : true
+            syntax = acorn.parse(text, {
+                locations       : true,
+                ranges          : true,
+                trackComments   : true
             });
         } catch (err) {
             // do nothing

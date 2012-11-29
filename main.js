@@ -86,7 +86,7 @@ define(function (require, exports, module) {
                 child = object[key];
                 path = [ object ];
                 path.push(parent);
-                if (typeof child === 'object' && child !== null) {
+                if (typeof child === "object" && child !== null) {
                     if (traverse(child, visitor, path) === false) {
                         // stop traversal
                         return false;
@@ -106,7 +106,7 @@ define(function (require, exports, module) {
         
         identifiers = {};
     
-        // AST will be null if theree are unrecoverable errors
+        // AST will be null if there are unrecoverable errors
         if (parseInfo.syntax === null) {
             return;
         }
@@ -208,7 +208,12 @@ define(function (require, exports, module) {
         _installEditorListeners(current);
     }
     
-    function _getIdentifiersInScope(scope, pos) {
+    /**
+     * Returns all identifiers beginning at the top of the scope tree,
+     * traversing down the branch of the tree that contains the specified
+     * index.
+     */
+    function _getIdentifiersInScope(scope, index) {
         var identifiers = [],
             queue = [scope],
             current,
@@ -218,7 +223,7 @@ define(function (require, exports, module) {
             current = queue.shift();
             node = current.node;
             
-            if (node.range && node.range[0] <= pos && pos < node.range[1]) {
+            if (node.range && node.range[0] <= index && index < node.range[1]) {
                 queue = [].concat(current.children);
                 
                 // add immediate identifier children

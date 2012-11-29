@@ -4,3 +4,6 @@
 [submodule "thirdparty/jquery-throttle-debounce"]
 	path = thirdparty/jquery-throttle-debounce
 	url = https://github.com/cowboy/jquery-throttle-debounce.git
+[submodule "thirdparty/acorn"]
+	path = thirdparty/acorn
+	url = git@github.com:jasonsanjose/acorn.git

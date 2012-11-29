@@ -1,24 +1,31 @@
-define(function () {
-    function myFunction(arg) {
-        var foo, bar = 1;
-    }
-});
+var foo, hello;
 
-function sayHello(str) {
-    sayWorld();
+function bar(foo) {
+  foo = null;
 }
 
-function clear(z) {
-    if (z) {
-        var hoist1;
-    } else if (!z) {
-        var hoist2; 
-    } else {
-        var hoist3; 
-    }
-}
+//define(function (bar) {
+//    var bar = 0;
+//    function myFunction(arg) {
+//        var foo, bar = 1;
+//    }
+//});
 
-var outer;
-(function (x) {
-    var inner;
-}());
+//function sayHello(str) {
+//    sayWorld();
+//}
+//
+//function clear(z) {
+//    if (z) {
+//        var hoist1;
+//    } else if (!z) {
+//        var hoist2; 
+//    } else {
+//        var hoist3; 
+//    }
+//}
+//
+//var outer;
+//(function (x) {
+//    var inner;
+//}());
