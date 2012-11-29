@@ -28,12 +28,30 @@ importScripts("thirdparty/acorn/acorn.js");
 (function () {
     'use strict';
     
-    function _addIdentifier(scope, node) {
-        var id = (node.name) ? node : node.id;
+    function _getIdentifier(node) {
+        return (node.name) ? node : node.id;
+    }
+    
+    function _addToScope(node, id, collection) {
+        collection[id.name] = node;
+    }
+    
+    function _addIdentifier(scope, node, id) {
+        id = id || _getIdentifier(node);
         
         if (id) {
             scope.identifiers = scope.identifiers || {};
-            scope.identifiers[id.name] = node;
+            _addToScope(node, id, scope.identifiers);
+        }
+    }
+    
+    function _addDeclaration(scope, node) {
+        var id = _getIdentifier(node);
+        
+        if (id) {
+            scope.declarations = scope.declarations || {};
+            _addToScope(node, id, scope.declarations);
+            _addIdentifier(scope, node, id);
         }
     }
     
@@ -73,6 +91,14 @@ importScripts("thirdparty/acorn/acorn.js");
         return scope;
     }
     
+    function _addDeclarations(scope, collection) {
+        var i;
+        
+        for (i = 0; i < collection.length; i++) {
+            _addDeclaration(scope, collection[i]);
+        }
+    }
+    
     /**
      * Walk the syntax tree looking for scopes (closures). Returns a tree of 
      * scopes including declared and undeclared indentifiers.
@@ -83,7 +109,7 @@ importScripts("thirdparty/acorn/acorn.js");
             queue = [program],
             type,
             scope = _createNewScope(program),
-            childScope,
+            blockScope,
             root = scope;
         
         while (queue.length > 0) {
@@ -96,20 +122,19 @@ importScripts("thirdparty/acorn/acorn.js");
             } else if (type === acorn.Syntax.FunctionDeclaration
                     || type === acorn.Syntax.FunctionExpression) {
                 // add function decl to parent scope
-                _addIdentifier(scope, current);
+                _addDeclaration(scope, current);
                 
                 // create a brand new scope for this closure
-                queue.push(_createNewScope(current, scope));
+                blockScope = _createNewScope(current, scope);
+                _pushQueue(queue, blockScope);
                 
                 // add params to function decl scope
-                _pushQueue(queue, current.params);
+                _addDeclarations(blockScope, current.params);
                 
                 // add body
                 _pushQueue(queue, current.body);
             } else if (type === acorn.Syntax.VariableDeclaration) {
-                _unshiftQueue(queue, current.declarations);
-            } else if (type === acorn.Syntax.Identifier) {
-                _addIdentifier(scope, current);
+                _addDeclarations(scope, current.declarations);
             } else if (type === acorn.Syntax.ExpressionStatement) {
                 _unshiftQueue(queue, current.expression);
             } else if (type === acorn.Syntax.CallExpression) {

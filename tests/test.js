@@ -4,12 +4,12 @@ function bar(foo) {
   foo = null;
 }
 
-//define(function (bar) {
-//    var bar = 0;
-//    function myFunction(arg) {
-//        var foo, bar = 1;
-//    }
-//});
+define(function (bar) {
+    var bar = 0;
+    function myFunction(arg) {
+        var foo, bar = 1;
+    }
+});
 
 //function sayHello(str) {
 //    sayWorld();

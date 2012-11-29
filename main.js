@@ -29,7 +29,7 @@ define(function (require, exports, module) {
     
     require("thirdparty/jquery-throttle-debounce/jquery.ba-throttle-debounce");
     
-    var esprima             = require("thirdparty/esprima/esprima"),
+    var acorn               = require("thirdparty/acorn/acorn"),
         CodeHintsManager    = brackets.getModule("editor/CodeHintManager"),
         EditorManager       = brackets.getModule("editor/EditorManager"),
         ExtensionUtils      = brackets.getModule("utils/ExtensionUtils"),
@@ -45,8 +45,7 @@ define(function (require, exports, module) {
         worker,
         parseInfo,
         markers             = [],
-        identifiers         = {},
-        enabled = false;
+        enabled             = true;
     
     function _parseEditor(editor) {
         // TODO handle async issues if parsing completes after switching editors
@@ -98,13 +97,37 @@ define(function (require, exports, module) {
         return true;
     }
     
+    /**
+     * Returns the scope for the identifier's declaration. 
+     */
+    function _getScopeForIdentifier(scope, index, id) {
+        var result,
+            queue = [scope],
+            current,
+            node;
+        
+        while (queue.length) {
+            current = queue.shift();
+            node = current.node;
+            
+            if (node.range && node.range[0] <= index && index < node.range[1]) {
+                queue = [].concat(current.children);
+                
+                if (current.declarations && current.declarations[id.name]) {
+                    // found a matching variable name declaration
+                    result = current;
+                }
+            }
+        }
+        
+        return result;
+    }
+    
     // modified from http://esprima.org/demo/highlight.html
     function trackCursor(editor) {
         var pos, node, id;
         
         _clearMarkers();
-        
-        identifiers = {};
     
         // AST will be null if there are unrecoverable errors
         if (parseInfo.syntax === null) {
@@ -117,7 +140,7 @@ define(function (require, exports, module) {
         traverse(parseInfo.syntax, function (node, path) {
             var start, end;
             
-            if (node.type !== esprima.Syntax.Identifier) {
+            if (node.type !== acorn.Syntax.Identifier) {
                 return true;
             }
             
@@ -140,17 +163,33 @@ define(function (require, exports, module) {
         });
     
         // highlight all occurrences of the identifier
+        if (!id) {
+            return;
+        }
+        
+        var cursorScope = _getScopeForIdentifier(parseInfo.scope, pos, id),
+            nodeScope,
+            matchName,
+            inRange;
+        
         traverse(parseInfo.syntax, function (node, path) {
             var start, end;
             
-            if (node.type !== esprima.Syntax.Identifier) {
+            if (node.type !== acorn.Syntax.Identifier) {
                 return true;
             }
             
-            // log all identifiers
-            identifiers[node.name] = node;
+            // match the identifier token
+            matchName = id && node !== id && node.name === id.name;
             
-            if (id && node !== id && node.name === id.name) {
+            // verify the node is inside the declaring scope's range
+            inRange = matchName && node.range[0] >= cursorScope.node.range[0] && node.range[1] <= cursorScope.node.range[1];
+            
+            // make sure the current node is not in a descendant scope that
+            // declares the same variable name
+            nodeScope = inRange ? _getScopeForIdentifier(cursorScope, node.range[0], id) : null;
+            
+            if (inRange && cursorScope === nodeScope) {
                 start = {
                     line: node.loc.start.line - 1,
                     ch: node.loc.start.column
@@ -289,10 +328,10 @@ define(function (require, exports, module) {
         return key === ".";
     };
     
-    function _handleToggleParser() {
+    function _setParserEnabled(newEnabled) {
         var $exports = $(exports);
         
-        enabled = !enabled;
+        enabled = newEnabled;
         
         CommandManager.get(PARSER_COMMAND_ID).setChecked(enabled);
         
@@ -343,10 +382,15 @@ define(function (require, exports, module) {
         }
     }
     
+    function _handleToggleParser() {
+        _setParserEnabled(!enabled);
+    }
+    
     // init
     (function () {
         // create command
         var cmd = CommandManager.register(PARSER_COMMAND_STR, PARSER_COMMAND_ID, _handleToggleParser);
+        _setParserEnabled(enabled);
         
         var debugMenu = Menus.getMenu(Menus.AppMenuBar.DEBUG_MENU);
         debugMenu.addMenuItem(PARSER_COMMAND_ID);
